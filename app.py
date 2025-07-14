@@ -36,7 +36,7 @@ except Exception as e:
 
 
 # --- Helper Functions ---
-@st.cache_data
+@st.cache_data(ttl=600)  # Cache for 10 minutes
 def run_sql_snippet(snippet_name: str, params: dict = None):
     """Runs a SQL snippet from Supabase."""
     try:
