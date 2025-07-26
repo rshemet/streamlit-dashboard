@@ -5,6 +5,8 @@ import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
+prod_values_to_filter_out = ['kin_ai', 'cactus_chat', 'other']
+
 load_dotenv()
 
 # --- Page Configuration ---
@@ -98,8 +100,16 @@ st.markdown("""
 This dashboard visualizes daily performance metrics for Cactus.
 """)
 
+included_projects = st.multiselect(
+    "Select projects to include:", 
+    options=prod_values_to_filter_out, 
+    default=['other']
+)
+filter_out_projects = [p for p in prod_values_to_filter_out if p not in included_projects]
+params = {"filter_out_projects": filter_out_projects}
+
 # Load project rates from a single snippet
-project_rates = run_sql_snippet('get_project_error_rate')
+project_rates = run_sql_snippet('get_project_error_rate', params=params)
 if not project_rates.empty:
     project_rates.rename(columns={'t': 'time'}, inplace=True)
     project_rates['time'] = pd.to_datetime(project_rates['time'])
@@ -110,7 +120,7 @@ else:
     st.warning("Could not load project rates. Using sample data.")
 
 # Load device rates from a single snippet since it contains both success and error rates
-device_rates = run_sql_snippet('get_device_error_rate')
+device_rates = run_sql_snippet('get_device_error_rate', params=params)
 if not device_rates.empty:
     device_rates.rename(columns={'t': 'time'}, inplace=True)
     device_rates['time'] = pd.to_datetime(device_rates['time'])
@@ -121,7 +131,7 @@ else:
     st.warning("Could not load device rates. Using sample data for device counts, success and error rates.")
 
 
-cumulative_tokens = run_sql_snippet('get_generated_tokens_new')
+cumulative_tokens = run_sql_snippet('get_generated_tokens_new', params=params)
 if not cumulative_tokens.empty:
     # Adapt to the new data format
     cumulative_tokens.rename(columns={'t': 'time'}, inplace=True)
@@ -130,24 +140,24 @@ if not cumulative_tokens.empty:
     # Densify the data to fix gaps in the cumulative chart
     # Create a complete grid of dates and devices
     date_range = pd.date_range(start=cumulative_tokens['time'].min(), end=cumulative_tokens['time'].max(), freq='D')
-    all_devices = cumulative_tokens['device'].unique()
-    grid = pd.MultiIndex.from_product([date_range, all_devices], names=['time', 'device']).to_frame(index=False)
+    all_devices = cumulative_tokens['device_manufacturer'].unique()
+    grid = pd.MultiIndex.from_product([date_range, all_devices], names=['time', 'device_manufacturer']).to_frame(index=False)
 
     # Sum up tokens per day/device in case there are multiple entries
-    daily_tokens = cumulative_tokens.groupby(['time', 'device'])['tokens_generated'].sum().reset_index()
+    daily_tokens = cumulative_tokens.groupby(['time', 'device_manufacturer'])['tokens_generated'].sum().reset_index()
 
     # Merge with the grid to fill in missing data
-    merged_df = pd.merge(grid, daily_tokens, on=['time', 'device'], how='left').fillna(0)
+    merged_df = pd.merge(grid, daily_tokens, on=['time', 'device_manufacturer'], how='left').fillna(0)
 
     # Sort by device and time, then calculate the true cumulative sum
-    merged_df.sort_values(['device', 'time'], inplace=True)
-    merged_df['cumulative_tokens'] = merged_df.groupby('device')['tokens_generated'].cumsum()
+    merged_df.sort_values(['device_manufacturer', 'time'], inplace=True)
+    merged_df['cumulative_tokens'] = merged_df.groupby('device_manufacturer')['tokens_generated'].cumsum()
     cumulative_tokens = merged_df
 else:
     st.warning("Could not load cumulative tokens. Using sample data.")
 
 
-error_logs = run_sql_snippet('get_error_logs')
+error_logs = run_sql_snippet('get_error_logs', params=params)
 if error_logs.empty:
     st.warning("Could not load error logs. Using sample data.")
 
@@ -193,19 +203,23 @@ with col3b:
 
 
 # --- Row 4: Cumulative Tokens ---
-st.header("Cumulative Tokens Generated")
+st.header("Tokens Generated")
 if not cumulative_tokens.empty:
-    chart4 = alt.Chart(cumulative_tokens).mark_area().encode(
-        x=alt.X('time:T', title='Time', axis=alt.Axis(format='%b %d')),
-        y=alt.Y('cumulative_tokens:Q', title='Cumulative Tokens'),
-        color=alt.Color('device:N', legend=alt.Legend(title="Device")),
-        tooltip=['time', 'device', 'tokens_generated', 'cumulative_tokens']
+    chart4 = alt.Chart(cumulative_tokens).mark_bar().encode(
+        x=alt.X('time:T', timeUnit='yearmonthdate', title='Time', axis=alt.Axis(format='%b %d')),
+        y=alt.Y('tokens_generated:Q', title='Tokens Generated', stack=True),
+        color=alt.Color('device_manufacturer:N', legend=alt.Legend(title="Device Manufacturer")),
+        tooltip=[
+            'time',
+            'device_manufacturer',
+            alt.Tooltip('tokens_generated:Q', title='Tokens Generated')
+        ]
     ).properties(
-        title='Tokens Generated, Cumulative Over Time'
+        title='Daily Tokens Generated'
     ).interactive()
     st.altair_chart(chart4, use_container_width=True)
 else:
-    st.warning("No data for Cumulative Tokens chart.")
+    st.warning("No data for Tokens Generated chart.")
 
 
 # --- Row 5: Raw Error Logs ---
