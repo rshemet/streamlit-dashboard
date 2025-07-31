@@ -100,35 +100,51 @@ st.markdown("""
 This dashboard visualizes daily performance metrics for Cactus.
 """)
 
-included_projects = st.multiselect(
-    "Select projects to include:", 
-    options=prod_values_to_filter_out, 
-    default=['other']
-)
+col_filter1, col_filter2 = st.columns(2)
+
+with col_filter1:
+    included_projects = st.multiselect(
+        "Select projects to include:", 
+        options=prod_values_to_filter_out, 
+        default=['other']
+    )
+
+with col_filter2:
+    group_by = st.selectbox(
+        "Group by:",
+        options=['project', 'device', 'event (NEW!) ⭐'],
+        index=0
+    )
+    # Clean the group_by value for internal use
+    if group_by.startswith('event'):
+        group_by = 'event'
+
 filter_out_projects = [p for p in prod_values_to_filter_out if p not in included_projects]
 params = {"filter_out_projects": filter_out_projects}
 
-# Load project rates from a single snippet
-project_rates = run_sql_snippet('get_project_error_rate', params=params)
-if not project_rates.empty:
-    project_rates.rename(columns={'t': 'time'}, inplace=True)
-    project_rates['time'] = pd.to_datetime(project_rates['time'])
-    project_counts = project_rates
-    success_rate_project = project_rates
-    error_rate_project = project_rates
-else:
-    st.warning("Could not load project rates. Using sample data.")
+# Load data based on group_by selection
+if group_by == 'project':
+    rates_data = run_sql_snippet('get_project_error_rate', params=params)
+    count_field = 'projects'
+    chart_suffix = '(by Project)'
+elif group_by == 'device':
+    st.warning("⚠️ **Watch out:** there is a known issue with telemetry, which **does not** log device ID in error logs. This leads to misleadingly low error rates. \n\nGroup errors **by event** for a more accurate representation.")
+    rates_data = run_sql_snippet('get_device_error_rate', params=params)
+    count_field = 'devices'
+    chart_suffix = '(by Device)'
+else:  # event
+    rates_data = run_sql_snippet('get_event_error_rate', params=params)
+    count_field = 'events'
+    chart_suffix = '(by Event)'
 
-# Load device rates from a single snippet since it contains both success and error rates
-device_rates = run_sql_snippet('get_device_error_rate', params=params)
-if not device_rates.empty:
-    device_rates.rename(columns={'t': 'time'}, inplace=True)
-    device_rates['time'] = pd.to_datetime(device_rates['time'])
-    success_rate_device = device_rates
-    error_rate_device = device_rates
-    device_counts = device_rates
+if not rates_data.empty:
+    rates_data.rename(columns={'t': 'time'}, inplace=True)
+    rates_data['time'] = pd.to_datetime(rates_data['time'])
+    counts_data = rates_data
+    success_rate_data = rates_data
+    error_rate_data = rates_data
 else:
-    st.warning("Could not load device rates. Using sample data for device counts, success and error rates.")
+    st.warning(f"Could not load {group_by} rates. Using sample data.")
 
 
 cumulative_tokens = run_sql_snippet('get_generated_tokens_new', params=params)
@@ -161,49 +177,27 @@ error_logs = run_sql_snippet('get_error_logs', params=params)
 if error_logs.empty:
     st.warning("Could not load error logs. Using sample data.")
 
-# --- Row 1 ---
-st.header("Daily Project and Device Counts")
-col1a, col1b = st.columns(2)
+# --- Row 1: Daily Counts ---
+st.header(f"Daily {group_by.title()} Count")
+chart1 = create_stacked_bar_chart(counts_data, 'time', count_field, 'framework', f'Daily {group_by.title()} Count', f'{group_by.title()} Count')
+if chart1:
+    st.altair_chart(chart1, use_container_width=True)
 
-with col1a:
-    chart1a = create_stacked_bar_chart(project_counts, 'time', 'projects', 'framework', 'Daily Project Count', 'Project Count')
-    if chart1a:
-        st.altair_chart(chart1a, use_container_width=True)
+# --- Row 2: Success Rate ---
+st.header(f"Success Rate {chart_suffix}")
+chart2 = create_line_chart(success_rate_data, 'time', 'success_rate', 'framework', f'Daily Success Rate {chart_suffix}', 'Success Rate (%)', y_axis_format='%')
+if chart2:
+    st.altair_chart(chart2, use_container_width=True)
 
-with col1b:
-    chart1b = create_stacked_bar_chart(device_counts, 'time', 'devices', 'framework', 'Daily Device Count', 'Device Count')
-    if chart1b:
-        st.altair_chart(chart1b, use_container_width=True)
-
-# --- Row 2 ---
-st.header("Success Rate")
-col2a, col2b = st.columns(2)
-
-with col2a:
-    chart2a = create_line_chart(success_rate_project, 'time', 'success_rate', 'framework', 'Daily Success Rate (by Project)', 'Success Rate (%)', y_axis_format='%')
-    if chart2a:
-        st.altair_chart(chart2a, use_container_width=True)
-with col2b:
-    chart2b = create_line_chart(success_rate_device, 'time', 'success_rate', 'framework', 'Daily Success Rate (by Device)', 'Success Rate (%)', y_axis_format='%')
-    if chart2b:
-        st.altair_chart(chart2b, use_container_width=True)
-
-# --- Row 3 ---
-st.header("Error Rate")
-col3a, col3b = st.columns(2)
-
-with col3a:
-    chart3a = create_line_chart(error_rate_project, 'time', 'error_rate', 'framework', 'Daily Error Rate (by Project)', 'Error Rate (%)', y_axis_format='%')
-    if chart3a:
-        st.altair_chart(chart3a, use_container_width=True)
-with col3b:
-    chart3b = create_line_chart(error_rate_device, 'time', 'error_rate', 'framework', 'Daily Error Rate (by Device)', 'Error Rate (%)', y_axis_format='%')
-    if chart3b:
-        st.altair_chart(chart3b, use_container_width=True)
+# --- Row 3: Error Rate ---
+st.header(f"Error Rate {chart_suffix}")
+chart3 = create_line_chart(error_rate_data, 'time', 'error_rate', 'framework', f'Daily Error Rate {chart_suffix}', 'Error Rate (%)', y_axis_format='%')
+if chart3:
+    st.altair_chart(chart3, use_container_width=True)
 
 
 # --- Row 4: Cumulative Tokens ---
-st.header("Tokens Generated")
+st.header("Total Tokens Generated")
 if not cumulative_tokens.empty:
     chart4 = alt.Chart(cumulative_tokens).mark_bar().encode(
         x=alt.X('time:T', timeUnit='yearmonthdate', title='Time', axis=alt.Axis(format='%b %d')),
